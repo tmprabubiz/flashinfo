@@ -1,10 +1,7 @@
-﻿feedparser
+﻿
 requests
+feedparser
 trafilatura
-gspread
-google-auth
-python-dateutil
-beautifulsoup4
-lxml
-requests
+lxml_html_clean
 python-dotenv
+
