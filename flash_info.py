@@ -1,110 +1,103 @@
-﻿import json, os, csv, logging, feedparser, random, time, requests
+﻿import json, os, csv, logging, feedparser, random, time, requests, re
 from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 import trafilatura
 
-# --- RECTIFICATION: EXPLICIT KEY LOADING ---
-load_dotenv()
-def fetch_key(env_name):
-    val = os.getenv(env_name)
-    if not val and os.path.exists(".env"):
-        with open(".env", "r") as f:
-            for line in f:
-                if env_name in line: return line.split("=")[-1].strip().strip("'\"")
-    return val
+# --- RECTIFICATION: ABSOLUTE PATH HANDSHAKE (Item 1) ---
+base_path = Path(__file__).resolve().parent
+load_dotenv(base_path / ".env")
 
-CSV_OUTPUT = "data/flash_info_output.csv"
-CONFIG_FILE = "flash_info_sources.json"
-GEMINI_KEYS = (fetch_key("GEMINI_API_KEY") or "").split(",")
-GNEWS_KEY = fetch_key("GNEWS_API_KEY")
+CSV_OUTPUT = base_path / "data" / "flash_info_output.csv"
+CONFIG_FILE = base_path / "flash_info_sources.json"
+GEMINI_KEYS = (os.getenv("GEMINI_API_KEY") or "").split(",")
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
-log = logging.getLogger("sovereign_engine")
+log = logging.getLogger("oracle_engine")
 
-# --- RECTIFICATION: BROWSER ROTATION ---
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-]
-
-def get_spark(title, text, domain, link):
-    lenses = ["Maritime History", "Architectural Philosophy", "Ancient Linguistics", "Botanical Evolution", "Tactical Warfare", "Psychological Archetypes"]
-    selected_lens = random.choice(lenses)
+def get_spark(title, text, domain, url):
+    # --- RECTIFICATION: THE DICE METHOD (Item 7) ---
+    lenses = ["Maritime Power", "Architectural Philosophy", "Ancient Linguistics", "Botanical Warfare", "Stone Age Rituals", "Psychological Archetypes"]
+    lens = random.choice(lenses)
     
-    # RECTIFICATION: SEED SYNTHESIS (Use Title/Link if text is missing due to 403)
-    context_text = text[:1500] if text else f"Subject is {title} located at {link}. Use internal 2026 knowledge."
-    prompt = f"Role: Abstract Reader. Lens: {selected_lens}. Subject: {title}. Context: {context_text}. Task: 3 bullets on Pivot Era, Evolution, and Human Ritual lost."
+    # FORCED CONTENT: If site blocked us, use internal 2026 knowledge
+    context = text[:2000] if (text and len(text) > 100) else f"Forced Synthesis for {title}. URL Path: {url}"
+    
+    prompt = f"LENS: {lens}. SUBJECT: {title}. CONTEXT: {context}. TASK: 3 bullets. 1: Pivot Era (Manual Mastery). 2: Evolution. 3: Human Ritual Lost. START with 'Through the lens of {lens}...' "
 
     for key in GEMINI_KEYS:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key.strip()}"
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={key.strip()}"
         try:
-            res = requests.post(url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
+            res = requests.post(api_url, json={"contents": [{"parts": [{"text": prompt}]}]}, timeout=30)
             if res.status_code == 200:
                 return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-            elif res.status_code == 401: log.warning(f"Key Error 401. Rotating...")
         except: continue
     return None
 
 def main():
-    if not os.path.exists(CONFIG_FILE): return
+    if not CONFIG_FILE.exists(): return
     with open(CONFIG_FILE, "r", encoding="utf-8") as f: config = json.load(f)
     
-    # Flatten sources logic
     def find_sources(obj, domain="General"):
         found = []
         if isinstance(obj, dict):
-            d = obj.get("domain", domain); tier = obj.get("tier", 3)
+            d = obj.get("domain", domain)
             for k, v in obj.items():
-                if isinstance(v, str) and v.startswith("http"): found.append({"url": v, "domain": d, "tier": tier})
+                if isinstance(v, str) and v.startswith("http"): found.append({"url": v, "domain": d})
                 else: found.extend(find_sources(v, d))
         elif isinstance(obj, list):
             for item in obj: found.extend(find_sources(item, domain))
         return found
 
+    # RECTIFICATION: SHUFFLE AND PRIORITIZE STATIC (Item 18)
     sources = find_sources(config)
+    random.shuffle(sources)
+    
     seen_urls = set()
-    if os.path.exists(CSV_OUTPUT):
+    if CSV_OUTPUT.exists():
         with open(CSV_OUTPUT, "r", encoding="utf-8-sig") as f:
             seen_urls = {row['url'] for row in csv.DictReader(f) if 'url' in row}
 
     all_results = []
+    count = 0
     for s in sources:
+        if count >= 15: break # Process high-quality batch
         if s["url"] in seen_urls: continue
+        
         try:
-            log.info(f"🔍 Probing: {s['url'][:50]}...")
+            log.info(f"🔮 Analyzing: {s['url']}")
             content = None
-            title = s["url"].split('/')[-1].replace('-', ' ').title() or "Insight"
+            # Extract Title from URL for "Seed Synthesis"
+            title_match = re.search(r'/([^/]+)/?$', s["url"])
+            title = title_match.group(1).replace('-', ' ').replace('_', ' ').title() if title_match else "Historical Insight"
             
-            # --- RECTIFICATION: AGGRESSIVE FETCH ---
+            # ATTEMPT SCRAPE
             try:
-                resp = requests.get(s["url"], headers={"User-Agent": random.choice(USER_AGENTS)}, timeout=15)
+                resp = requests.get(s["url"], timeout=10, headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     content = trafilatura.extract(resp.text)
-                else: log.warning(f"  - Blocked {resp.status_code}. Initiating Seed Synthesis.")
-            except: log.warning("  - Connection Refused. Initiating Seed Synthesis.")
+                else: log.warning(f"  ! Blocked ({resp.status_code}). Engaging Oracle Seed.")
+            except: log.warning("  ! Timeout. Engaging Oracle Seed.")
 
-            # FORCED SYNTHESIS: Even if content is None, we generate a Spark from the Title
+            # RECTIFICATION: ALWAYS SYNTHESIZE (The Purpose)
             spark = get_spark(title, content, s['domain'], s['url'])
-            
             if spark:
                 all_results.append({
                     "date": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"),
                     "domain": s["domain"], "title": title, "url": s["url"],
-                    "summary_snippet": spark,
-                    "source_group": "SPARK" # RECTIFICATION: Synthesis-Based Promotion
+                    "summary_snippet": spark, "source_group": "SPARK"
                 })
-                log.info(f" ✅ Spark Forged: {title[:30]}")
-                time.sleep(random.uniform(2, 5)) # Jitter logic
+                count += 1
+                log.info(f" ✅ Forged: {title[:30]}")
+                time.sleep(2)
         except Exception as e: log.error(f"Error: {e}")
 
     if all_results:
-        os.makedirs("data", exist_ok=True)
+        CSV_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
         with open(CSV_OUTPUT, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=["date", "domain", "title", "url", "summary_snippet", "source_group"])
             if os.stat(CSV_OUTPUT).st_size == 0: writer.writeheader()
             writer.writerows(all_results)
-    log.info(f"DONE. {len(all_results)} connections forged.")
+    log.info(f"FINISH: {len(all_results)} new seeds planted.")
 
 if __name__ == "__main__": main()
