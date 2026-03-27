@@ -1,0 +1,8 @@
+﻿
+venv/
+.env
+*.zip
+service_account.json
+GCP_Key/
+__pycache__/
+
